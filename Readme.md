@@ -46,6 +46,8 @@ Client → API (Gin)
         OpenAI API
             ↓
         Evaluation Stored in DB
+
+
 📁 Project Structure
 go-backend/
 ├── cmd/api/main.go
