@@ -1,0 +1,12 @@
+api
+worker
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+vendor/
+.env.env
+.env
