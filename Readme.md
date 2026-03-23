@@ -31,8 +31,12 @@ Metrics	Prometheus + Grafana
 Queue	In-memory (extensible)
 Container	Docker
 🏗 Architecture
+
+
+
 Client → API (Gin)
             ↓
+        
         PostgreSQL
             ↓
         Queue (Channel)
