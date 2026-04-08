@@ -94,8 +94,6 @@
     <button class="active" onclick="show('config')">⚙️ Base URL & Token</button>
 
     <div class="nav-group">Auth</div>
-    <button onclick="show('register')">📝 Register</button>
-    <button onclick="show('login')">🔑 Login</button>
     <button onclick="show('me')">👤 Get Me</button>
 
     <div class="nav-group">Interviews</div>
@@ -132,58 +130,28 @@
   <div class="card">
     <h3>🔗 Base URL</h3>
     <label>API Base URL</label>
-    <input id="baseUrl" value="http://localhost:8000" placeholder="http://localhost:8081" />
+    <input id="baseUrl" value="http://localhost:8081" placeholder="http://localhost:8081" />
     <p class="hint">Change this if your Go server runs on a different port.</p>
   </div>
   <div class="card">
-    <h3>🔐 JWT Token</h3>
-    <label>Paste your token here (or it fills automatically after login)</label>
-    <textarea id="globalToken" rows="3" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."></textarea>
+    <h3>🔐 Clerk Session Token</h3>
+    <label>Paste your Clerk session token (JWT)</label>
+    <textarea id="globalToken" rows="3" placeholder="eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."></textarea>
     <button class="btn ghost sm" onclick="clearToken()">Clear token</button>
-    <p class="hint">All authenticated requests use this token.</p>
+    <p class="hint">Get this from your frontend: <code>await getToken()</code> via Clerk's <code>useAuth()</code> hook. All authenticated requests use this token.</p>
+    <div style="margin-top:14px;padding:12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;font-size:12px;color:var(--muted);line-height:1.8">
+      <strong style="color:var(--text)">How to get your token:</strong><br/>
+      1. Sign in via your Clerk-powered frontend<br/>
+      2. Run in browser console: <code style="color:var(--primary)">await window.Clerk.session.getToken()</code><br/>
+      3. Paste the result above
+    </div>
   </div>
-</div>
-
-<!-- REGISTER -->
-<div id="register" class="section">
-  <h2>Register</h2>
-  <p class="subtitle">POST /api/auth/register — Create a new user account.</p>
-  <div class="card">
-    <label>Full Name</label>
-    <input id="reg-name" placeholder="Alice Smith" />
-    <label>Email</label>
-    <input id="reg-email" type="email" placeholder="alice@example.com" />
-    <label>Password (min 8 chars)</label>
-    <input id="reg-password" type="password" placeholder="password123" />
-    <label>Role</label>
-    <select id="reg-role">
-      <option value="candidate">candidate</option>
-      <option value="recruiter">recruiter</option>
-      <option value="admin">admin</option>
-    </select>
-    <button class="btn" onclick="doRegister()">Register</button>
-  </div>
-  <div class="response" id="res-register"></div>
-</div>
-
-<!-- LOGIN -->
-<div id="login" class="section">
-  <h2>Login</h2>
-  <p class="subtitle">POST /api/auth/login — Returns a JWT token.</p>
-  <div class="card">
-    <label>Email</label>
-    <input id="login-email" placeholder="alice@example.com" />
-    <label>Password</label>
-    <input id="login-password" type="password" placeholder="password123" />
-    <button class="btn" onclick="doLogin()">Login</button>
-  </div>
-  <div class="response" id="res-login"></div>
 </div>
 
 <!-- ME -->
 <div id="me" class="section">
   <h2>Get Current User</h2>
-  <p class="subtitle">GET /api/auth/me — Returns the authenticated user's profile.</p>
+  <p class="subtitle">GET /api/auth/me — Returns your profile. Auto-syncs your Clerk account into the DB on first call.</p>
   <div class="card">
     <button class="btn" onclick="doMe()">Get My Profile</button>
   </div>
@@ -499,38 +467,6 @@ function setToken(t) {
 }
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
-async function doRegister() {
-  const res = await api('POST', '/api/auth/register', {
-    name: document.getElementById('reg-name').value,
-    email: document.getElementById('reg-email').value,
-    password: document.getElementById('reg-password').value,
-    role: document.getElementById('reg-role').value,
-  });
-  renderResponse('res-register', res);
-  if (res.ok && res.data.token) {
-    setToken(res.data.token);
-    document.getElementById('res-register').innerHTML += `
-      <div style="margin-top:10px;font-size:12px;color:var(--green)">
-        ✅ Token auto-saved! User ID: <span class="inline-id" onclick="copyId('${res.data.user.id}')">${res.data.user.id}</span>
-      </div>`;
-  }
-}
-
-async function doLogin() {
-  const res = await api('POST', '/api/auth/login', {
-    email: document.getElementById('login-email').value,
-    password: document.getElementById('login-password').value,
-  });
-  renderResponse('res-login', res);
-  if (res.ok && res.data.token) {
-    setToken(res.data.token);
-    document.getElementById('res-login').innerHTML += `
-      <div style="margin-top:10px;font-size:12px;color:var(--green)">
-        ✅ Token auto-saved! User ID: <span class="inline-id" onclick="copyId('${res.data.user.id}')">${res.data.user.id}</span>
-      </div>`;
-  }
-}
-
 async function doMe() {
   const res = await api('GET', '/api/auth/me');
   renderResponse('res-me', res);

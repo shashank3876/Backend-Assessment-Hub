@@ -44,10 +44,10 @@ func (d *DB) Migrate(ctx context.Context) error {
 		CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 		CREATE TABLE IF NOT EXISTS users (
-			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL,
 			email TEXT NOT NULL UNIQUE,
-			password_hash TEXT NOT NULL,
+			password_hash TEXT NOT NULL DEFAULT '',
 			role TEXT NOT NULL DEFAULT 'candidate' CHECK (role IN ('candidate', 'recruiter', 'admin')),
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -105,6 +105,21 @@ func (d *DB) Migrate(ctx context.Context) error {
 		CREATE INDEX IF NOT EXISTS idx_questions_interview_id ON questions(interview_id);
 	`)
 	return err
+}
+
+func (d *DB) UpsertClerkUser(ctx context.Context, clerkID, email string, role models.UserRole) (*models.User, error) {
+	var u models.User
+	err := d.conn.QueryRowContext(ctx,
+		`INSERT INTO users (id, name, email, password_hash, role)
+		 VALUES ($1, $2, $3, '', $4)
+		 ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email, updated_at = NOW()
+		 RETURNING id, name, email, password_hash, role, created_at, updated_at`,
+		clerkID, email, email, string(role),
+	).Scan(&u.ID, &u.Name, &u.Email, &u.PasswordHash, &u.Role, &u.CreatedAt, &u.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
 }
 
 func (d *DB) CreateUser(ctx context.Context, name, email, passwordHash, role string) (*models.User, error) {

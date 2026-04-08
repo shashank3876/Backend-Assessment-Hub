@@ -2,7 +2,9 @@ package evaluation
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -11,34 +13,48 @@ import (
 	"github.com/interview-eval/backend/internal/config"
 	"github.com/interview-eval/backend/internal/db"
 	"github.com/interview-eval/backend/internal/models"
+	appredis "github.com/interview-eval/backend/internal/redis"
+	redispkg "github.com/redis/go-redis/v9"
 	openai "github.com/sashabaranov/go-openai"
 )
 
 const maxRetries = 3
 
 type Service struct {
-	db     *db.DB
-	client *openai.Client
+	db       *db.DB
+	client   *openai.Client
+	rdb      *redispkg.Client
+	cacheTTL time.Duration
 }
 
 type aiEvalResult struct {
-	Score               float64  `json:"score"`
-	Feedback            string   `json:"feedback"`
-	Strengths           []string `json:"strengths"`
-	AreasOfImprovement  []string `json:"areas_of_improvement"`
+	Score              float64  `json:"score"`
+	Feedback           string   `json:"feedback"`
+	Strengths          []string `json:"strengths"`
+	AreasOfImprovement []string `json:"areas_of_improvement"`
 }
 
-func New(database *db.DB, cfg *config.Config) *Service {
+func New(database *db.DB, cfg *config.Config, rdb *redispkg.Client) *Service {
 	clientConfig := openai.DefaultConfig(cfg.OpenAIAPIKey)
 	if cfg.OpenAIBaseURL != "" {
 		clientConfig.BaseURL = cfg.OpenAIBaseURL
 	}
 	client := openai.NewClientWithConfig(clientConfig)
-	return &Service{db: database, client: client}
+	return &Service{db: database, client: client, rdb: rdb, cacheTTL: cfg.EvaluationCacheTTL}
 }
 
 func (s *Service) EvaluateAnswer(ctx context.Context, job models.EvaluationJob) error {
 	slog.Info("evaluating answer", "answerId", job.AnswerID, "retry", job.RetryCount)
+
+	if _, err := s.db.GetEvaluationByAnswerID(ctx, job.AnswerID); err == nil {
+		if err := s.db.UpdateAnswerStatus(ctx, job.AnswerID, string(models.AnswerCompleted)); err != nil {
+			return fmt.Errorf("failed to update answer status: %w", err)
+		}
+		slog.Info("evaluation already persisted, skipping duplicate work", "answerId", job.AnswerID)
+		return nil
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("check existing evaluation: %w", err)
+	}
 
 	if err := s.db.UpdateAnswerStatus(ctx, job.AnswerID, string(models.AnswerProcessing)); err != nil {
 		return fmt.Errorf("failed to update answer status: %w", err)
@@ -88,6 +104,22 @@ func (s *Service) EvaluateAnswer(ctx context.Context, job models.EvaluationJob) 
 }
 
 func (s *Service) callAI(ctx context.Context, job models.EvaluationJob) (*aiEvalResult, error) {
+	cacheKey := appredis.EvaluationCacheKey(job.AnswerID)
+
+	if s.rdb != nil {
+		val, err := s.rdb.Get(ctx, cacheKey).Bytes()
+		if err == nil {
+			var cached aiEvalResult
+			if err := json.Unmarshal(val, &cached); err == nil {
+				slog.Info("evaluation cache hit", "answerId", job.AnswerID)
+				return &cached, nil
+			}
+			slog.Warn("evaluation cache corrupt, ignoring", "answerId", job.AnswerID, "error", err)
+		} else if !errors.Is(err, redispkg.Nil) {
+			slog.Warn("evaluation cache get failed", "answerId", job.AnswerID, "error", err)
+		}
+	}
+
 	systemPrompt := `You are an expert technical interviewer and evaluator. 
 Evaluate the candidate's answer to the interview question strictly and fairly.
 Return ONLY a valid JSON object with these exact fields:
@@ -99,11 +131,7 @@ Return ONLY a valid JSON object with these exact fields:
 }
 Do not include any text outside the JSON.`
 
-	userPrompt := fmt.Sprintf(
-		"Interview Question: %s\n\nCandidate's Answer: %s",
-		job.AnswerText,
-		job.AnswerText,
-	)
+	userPrompt := fmt.Sprintf("Interview Question: %s\n\nCandidate's Answer: %s", "(unknown)", job.AnswerText)
 
 	if job.QuestionID != "" {
 		q, err := s.db.GetQuestionByID(ctx, job.QuestionID)
@@ -132,7 +160,6 @@ Do not include any text outside the JSON.`
 	}
 
 	content := strings.TrimSpace(resp.Choices[0].Message.Content)
-	// Strip markdown code fences if present
 	if strings.HasPrefix(content, "```") {
 		lines := strings.Split(content, "\n")
 		if len(lines) > 2 {
@@ -157,6 +184,15 @@ Do not include any text outside the JSON.`
 	}
 	if result.AreasOfImprovement == nil {
 		result.AreasOfImprovement = []string{}
+	}
+
+	if s.rdb != nil && s.cacheTTL > 0 {
+		payload, err := json.Marshal(&result)
+		if err != nil {
+			slog.Warn("marshal evaluation for cache failed", "answerId", job.AnswerID, "error", err)
+		} else if err := s.rdb.Set(ctx, cacheKey, payload, s.cacheTTL).Err(); err != nil {
+			slog.Warn("evaluation cache set failed", "answerId", job.AnswerID, "error", err)
+		}
 	}
 
 	return &result, nil

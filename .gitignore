@@ -8,5 +8,5 @@ worker
 *.test
 *.out
 vendor/
-.env.env
+.env
 .env
