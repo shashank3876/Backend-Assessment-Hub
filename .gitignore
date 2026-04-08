@@ -10,3 +10,4 @@ worker
 vendor/
 .env
 .env
+.env
