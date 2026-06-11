@@ -1,0 +1,934 @@
+openapi: 3.0.3
+info:
+  title: Interview Evaluation Backend API
+  description: |
+    REST + WebSocket API for the AI-powered interview evaluation platform.
+
+    The service exposes endpoints for managing interviews, questions, answers,
+    AI-driven evaluations, leaderboards, analytics, and a WebRTC signaling
+    channel used to run live video interviews via an internal SFU.
+
+    Authentication is handled through Clerk-issued JWTs. Include the token as a
+    bearer credential in the `Authorization` header for all protected
+    endpoints. The WebRTC WebSocket accepts the same token as a `token` query
+    parameter.
+  version: 1.0.0
+  contact:
+    name: Interview Eval Backend
+    url: https://github.com/interview-eval/backend
+
+servers:
+  - url: http://localhost:8081
+    description: Local development
+  - url: https://api.example.com
+    description: Production (replace with real host)
+
+tags:
+  - name: System
+    description: Service health and observability endpoints
+  - name: Auth
+    description: Authentication and user profile
+  - name: Interviews
+    description: Manage interviews
+  - name: Questions
+    description: Manage interview questions
+  - name: Interview Session
+    description: Start an interview session as a candidate
+  - name: Answers
+    description: Submit and retrieve candidate answers
+  - name: Evaluations
+    description: AI evaluation results and leaderboards
+  - name: Analytics
+    description: Aggregate dashboard analytics
+  - name: Users
+    description: User administration
+  - name: WebRTC
+    description: WebRTC signaling for live interview sessions
+
+security:
+  - BearerAuth: []
+
+paths:
+  # ------------------------------------------------------------------
+  # System
+  # ------------------------------------------------------------------
+  /health:
+    get:
+      tags: [System]
+      summary: Liveness probe
+      description: Simple health check that returns 200 when the service is up.
+      security: []
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /metrics:
+    get:
+      tags: [System]
+      summary: Prometheus metrics
+      description: |
+        Prometheus exposition format metrics including HTTP request counters,
+        request duration histograms and evaluation queue counters.
+      security: []
+      responses:
+        '200':
+          description: Prometheus text format metrics
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  # ------------------------------------------------------------------
+  # Auth
+  # ------------------------------------------------------------------
+  /api/auth/me:
+    get:
+      tags: [Auth]
+      summary: Get current user
+      description: |
+        Returns the authenticated user's profile. On first call, lazily
+        upserts the user from the Clerk JWT claims into the local database.
+      responses:
+        '200':
+          description: Current user profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ------------------------------------------------------------------
+  # Interviews
+  # ------------------------------------------------------------------
+  /api/interviews:
+    get:
+      tags: [Interviews]
+      summary: List interviews
+      parameters:
+        - in: query
+          name: status
+          schema:
+            $ref: '#/components/schemas/InterviewStatus'
+          description: Optional filter by status.
+        - in: query
+          name: page
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: Paginated list of interviews
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  interviews:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Interview'
+                  total:
+                    type: integer
+                  page:
+                    type: integer
+                  limit:
+                    type: integer
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [Interviews]
+      summary: Create an interview
+      description: Requires `recruiter` or `admin` role.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateInterviewRequest'
+      responses:
+        '201':
+          description: Interview created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Interview'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/interviews/{id}:
+    get:
+      tags: [Interviews]
+      summary: Get interview by ID
+      parameters:
+        - $ref: '#/components/parameters/InterviewId'
+      responses:
+        '200':
+          description: Interview with its questions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InterviewWithQuestions'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    put:
+      tags: [Interviews]
+      summary: Update an interview
+      description: Requires `recruiter` or `admin` role. Only the provided fields are updated.
+      parameters:
+        - $ref: '#/components/parameters/InterviewId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateInterviewRequest'
+      responses:
+        '200':
+          description: Updated interview
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Interview'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/interviews/{id}/questions:
+    post:
+      tags: [Questions]
+      summary: Add a question to an interview
+      description: Requires `recruiter` or `admin` role.
+      parameters:
+        - $ref: '#/components/parameters/InterviewId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateQuestionRequest'
+      responses:
+        '201':
+          description: Question created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Question'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ------------------------------------------------------------------
+  # Interview session
+  # ------------------------------------------------------------------
+  /api/interview/start:
+    post:
+      tags: [Interview Session]
+      summary: Start an interview session
+      description: |
+        Starts an interview session for the authenticated candidate.
+        The interview must be in `active` status. Returns a session ID that is
+        required when joining the WebRTC signaling channel and when submitting
+        answers tied to the live session.
+
+        Requires `candidate` role.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [interviewId]
+              properties:
+                interviewId:
+                  type: string
+      responses:
+        '200':
+          description: Session metadata and the interview's questions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessionId:
+                    type: string
+                    example: sess_lz5xv9k8q
+                  interviewId:
+                    type: string
+                  candidateId:
+                    type: string
+                  startedAt:
+                    type: string
+                    format: date-time
+                  questions:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Question'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ------------------------------------------------------------------
+  # Answers
+  # ------------------------------------------------------------------
+  /api/answer/submit:
+    post:
+      tags: [Answers]
+      summary: Submit a candidate answer
+      description: |
+        Persists a candidate's answer and enqueues an asynchronous AI
+        evaluation job. Returns immediately with the answer ID and a queued
+        status. Poll `/api/answers/{id}` or `/api/evaluations/{answerId}` for
+        the final result.
+
+        Requires `candidate` role.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitAnswerRequest'
+      responses:
+        '202':
+          description: Answer accepted and queued for evaluation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  answerId:
+                    type: string
+                  status:
+                    $ref: '#/components/schemas/AnswerStatus'
+                  message:
+                    type: string
+                    example: Answer submitted and queued for AI evaluation
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/answers/{id}:
+    get:
+      tags: [Answers]
+      summary: Get an answer (and its evaluation when complete)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: |
+            Answer details. When `status == completed`, an `evaluation` field
+            with the AI evaluation is included.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnswerDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ------------------------------------------------------------------
+  # Evaluations / results
+  # ------------------------------------------------------------------
+  /api/results/{candidateId}:
+    get:
+      tags: [Evaluations]
+      summary: Get a candidate's results
+      parameters:
+        - in: path
+          name: candidateId
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: interviewId
+          schema:
+            type: string
+          description: Optional filter limiting results to a single interview.
+      responses:
+        '200':
+          description: Aggregate results for the candidate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CandidateResults'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/evaluations/{answerId}:
+    get:
+      tags: [Evaluations]
+      summary: Get the evaluation for a specific answer
+      parameters:
+        - in: path
+          name: answerId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Evaluation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Evaluation'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/evaluations/interview/{interviewId}/leaderboard:
+    get:
+      tags: [Evaluations]
+      summary: Leaderboard for an interview
+      parameters:
+        - in: path
+          name: interviewId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Ranked candidates for the interview
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  interviewId:
+                    type: string
+                  entries:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/LeaderboardEntry'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ------------------------------------------------------------------
+  # Analytics
+  # ------------------------------------------------------------------
+  /api/analytics/overview:
+    get:
+      tags: [Analytics]
+      summary: Aggregate analytics overview
+      description: Requires `recruiter` or `admin` role.
+      responses:
+        '200':
+          description: Aggregate analytics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyticsOverview'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ------------------------------------------------------------------
+  # Users (admin)
+  # ------------------------------------------------------------------
+  /api/users:
+    get:
+      tags: [Users]
+      summary: List users
+      description: Requires `admin` role.
+      parameters:
+        - in: query
+          name: role
+          schema:
+            $ref: '#/components/schemas/UserRole'
+          description: Optional filter by role.
+      responses:
+        '200':
+          description: List of users
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  users:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/UserProfile'
+                  total:
+                    type: integer
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ------------------------------------------------------------------
+  # WebRTC signaling
+  # ------------------------------------------------------------------
+  /api/webrtc/ws:
+    get:
+      tags: [WebRTC]
+      summary: WebRTC signaling WebSocket
+      description: |
+        Upgrades the HTTP connection to a WebSocket used for SFU signaling.
+        Authentication is performed via the `token` query parameter (Clerk
+        JWT) since browser WebSocket clients cannot send `Authorization`
+        headers.
+
+        After the upgrade, the client and server exchange JSON messages with
+        the following shape:
+
+        ```json
+        { "type": "offer" | "answer" | "ice-candidate" | "joined" | "leave" | "error",
+          "sdp": "...",
+          "candidate": { ... },
+          "sessionId": "...",
+          "role": "candidate" | "recruiter",
+          "iceServers": [ ... ],
+          "message": "..." }
+        ```
+
+        Client → server message types:
+        - `offer` — provides an SDP offer; server responds with `answer`.
+        - `ice-candidate` — trickle ICE candidate.
+        - `leave` — close the session.
+
+        Server → client message types:
+        - `joined` — initial confirmation with the configured ICE servers.
+        - `answer` — SDP answer to the client's offer.
+        - `error` — error condition (e.g. participant slot taken).
+      security: []
+      parameters:
+        - in: query
+          name: token
+          required: true
+          schema:
+            type: string
+          description: Clerk JWT bearer token.
+        - in: query
+          name: sessionId
+          required: true
+          schema:
+            type: string
+          description: Session ID returned from `/api/interview/start`.
+        - in: query
+          name: interviewId
+          required: true
+          schema:
+            type: string
+      responses:
+        '101':
+          description: Switching Protocols — WebSocket upgrade succeeded.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: "Clerk-issued JWT. Send as `Authorization: Bearer <token>`."
+
+  parameters:
+    InterviewId:
+      in: path
+      name: id
+      required: true
+      schema:
+        type: string
+      description: Interview ID.
+
+  responses:
+    BadRequest:
+      description: Malformed request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: Missing or invalid authentication token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: Authenticated user lacks the required role
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    InternalError:
+      description: Unexpected server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          example: invalid request
+
+    UserRole:
+      type: string
+      enum: [candidate, recruiter, admin]
+
+    InterviewStatus:
+      type: string
+      enum: [draft, active, closed]
+
+    QuestionType:
+      type: string
+      enum: [text, coding, behavioral]
+
+    AnswerStatus:
+      type: string
+      enum: [queued, processing, completed, failed]
+
+    UserProfile:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        role:
+          $ref: '#/components/schemas/UserRole'
+        createdAt:
+          type: string
+          format: date-time
+
+    Interview:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+          nullable: true
+        status:
+          $ref: '#/components/schemas/InterviewStatus'
+        createdBy:
+          type: string
+        durationMinutes:
+          type: integer
+          example: 60
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    InterviewWithQuestions:
+      allOf:
+        - $ref: '#/components/schemas/Interview'
+        - type: object
+          properties:
+            questions:
+              type: array
+              items:
+                $ref: '#/components/schemas/Question'
+
+    Question:
+      type: object
+      properties:
+        id:
+          type: string
+        interviewId:
+          type: string
+        text:
+          type: string
+        type:
+          $ref: '#/components/schemas/QuestionType'
+        order:
+          type: integer
+        maxScore:
+          type: number
+          format: double
+        expectedAnswer:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+
+    Answer:
+      type: object
+      properties:
+        id:
+          type: string
+        questionId:
+          type: string
+        interviewId:
+          type: string
+        candidateId:
+          type: string
+        answerText:
+          type: string
+        sessionId:
+          type: string
+          nullable: true
+        status:
+          $ref: '#/components/schemas/AnswerStatus'
+        submittedAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    AnswerDetail:
+      type: object
+      properties:
+        id:
+          type: string
+        questionId:
+          type: string
+        interviewId:
+          type: string
+        candidateId:
+          type: string
+        answerText:
+          type: string
+        status:
+          $ref: '#/components/schemas/AnswerStatus'
+        submittedAt:
+          type: string
+          format: date-time
+        evaluation:
+          $ref: '#/components/schemas/Evaluation'
+
+    Evaluation:
+      type: object
+      properties:
+        id:
+          type: string
+        answerId:
+          type: string
+        score:
+          type: number
+          format: double
+        feedback:
+          type: string
+        strengths:
+          type: array
+          items:
+            type: string
+        areasOfImprovement:
+          type: array
+          items:
+            type: string
+        retryCount:
+          type: integer
+        evaluatedAt:
+          type: string
+          format: date-time
+
+    AnswerWithEvaluation:
+      type: object
+      properties:
+        answer:
+          $ref: '#/components/schemas/Answer'
+        question:
+          $ref: '#/components/schemas/Question'
+        evaluation:
+          $ref: '#/components/schemas/Evaluation'
+
+    CandidateResults:
+      type: object
+      properties:
+        candidate:
+          $ref: '#/components/schemas/UserProfile'
+        totalScore:
+          type: number
+          format: double
+        averageScore:
+          type: number
+          format: double
+        answersEvaluated:
+          type: integer
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnswerWithEvaluation'
+
+    LeaderboardEntry:
+      type: object
+      properties:
+        rank:
+          type: integer
+        candidate:
+          $ref: '#/components/schemas/UserProfile'
+        totalScore:
+          type: number
+          format: double
+        averageScore:
+          type: number
+          format: double
+        answersEvaluated:
+          type: integer
+
+    AnalyticsOverview:
+      type: object
+      properties:
+        totalInterviews:
+          type: integer
+        activeInterviews:
+          type: integer
+        totalCandidates:
+          type: integer
+        totalAnswersSubmitted:
+          type: integer
+        totalAnswersEvaluated:
+          type: integer
+        pendingEvaluations:
+          type: integer
+        averageScore:
+          type: number
+          format: double
+        topPerformers:
+          type: array
+          items:
+            $ref: '#/components/schemas/LeaderboardEntry'
+
+    CreateInterviewRequest:
+      type: object
+      required: [title]
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        durationMinutes:
+          type: integer
+          default: 60
+        status:
+          $ref: '#/components/schemas/InterviewStatus'
+
+    UpdateInterviewRequest:
+      type: object
+      description: All fields are optional; only the provided fields are updated.
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        durationMinutes:
+          type: integer
+        status:
+          $ref: '#/components/schemas/InterviewStatus'
+
+    CreateQuestionRequest:
+      type: object
+      required: [text, type, maxScore]
+      properties:
+        text:
+          type: string
+        type:
+          $ref: '#/components/schemas/QuestionType'
+        order:
+          type: integer
+        maxScore:
+          type: number
+          format: double
+        expectedAnswer:
+          type: string
+
+    SubmitAnswerRequest:
+      type: object
+      required: [questionId, interviewId, answerText]
+      properties:
+        questionId:
+          type: string
+        interviewId:
+          type: string
+        answerText:
+          type: string
+        sessionId:
+          type: string
+          nullable: true

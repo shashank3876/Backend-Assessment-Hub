@@ -41,8 +41,13 @@ services:
       GO_PORT: "8081"
       AI_INTEGRATIONS_OPENAI_BASE_URL: ${AI_INTEGRATIONS_OPENAI_BASE_URL}
       AI_INTEGRATIONS_OPENAI_API_KEY: ${AI_INTEGRATIONS_OPENAI_API_KEY}
+      # WebRTC SFU (Pion): map the same UDP range to the host for media
+      WEBRTC_ICE_SERVERS_JSON: '[{"urls":["stun:stun.l.google.com:19302"]}]'
+      WEBRTC_UDP_PORT_MIN: "10000"
+      WEBRTC_UDP_PORT_MAX: "10100"
     ports:
       - "8081:8081"
+      - "10000-10100:10000-10100/udp"
     depends_on:
       postgres:
         condition: service_healthy

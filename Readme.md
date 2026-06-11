@@ -97,6 +97,9 @@ POST /api/interviews/:id/questions
 POST /api/interview/start
 POST /api/answer/submit
 GET /api/answers/:id
+🎥 Live interview video (WebRTC SFU, Pion)
+GET /api/webrtc/ws?token=<Clerk_JWT>&sessionId=<from_interview_start>&interviewId=<uuid>
+WebSocket signaling: after joined, send offer SDP, receive answer; exchange ice-candidate messages. The candidate must call POST /api/interview/start first so the session is registered; the recruiter uses the same sessionId and interviewId.
 📊 Analytics
 GET /api/results/:candidateId
 GET /api/evaluations/:answerId
@@ -120,6 +123,13 @@ JWT_SECRET=your-secret
 # AI
 AI_INTEGRATIONS_OPENAI_BASE_URL=https://api.openai.com/v1
 AI_INTEGRATIONS_OPENAI_API_KEY=your-openai-key
+
+# WebRTC SFU (optional; defaults to public STUN if unset)
+# JSON array of ICE servers (Pion webrtc.ICEServer shape), e.g. TURN in production
+WEBRTC_ICE_SERVERS_JSON=[{"urls":["stun:stun.l.google.com:19302"]}]
+# Limit UDP port range for ICE media (expose the same range in Docker/firewall)
+WEBRTC_UDP_PORT_MIN=10000
+WEBRTC_UDP_PORT_MAX=10100
 🚀 Getting Started
 1. Clone Repository
 git clone <your-repo-url>

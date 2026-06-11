@@ -1,10 +1,14 @@
 package config
 
 import (
+	"encoding/json"
 	"log"
 	"os"
 	"strconv"
+	"strings"
 	"time"
+
+	"github.com/pion/webrtc/v4"
 )
 
 type Config struct {
@@ -21,6 +25,9 @@ type Config struct {
 	QueueBlockTimeout      time.Duration
 	EvaluationCacheTTL     time.Duration
 	RateLimitUserPerMinute int
+	WebRTCICEServers       []webrtc.ICEServer
+	WebRTCUDPPortMin       int
+	WebRTCUDPPortMax       int
 }
 
 func Load() *Config {
@@ -102,6 +109,28 @@ func Load() *Config {
 		}
 	}
 
+	iceServers, err := parseICEServersJSON(os.Getenv("WEBRTC_ICE_SERVERS_JSON"))
+	if err != nil {
+		log.Fatalf("WEBRTC_ICE_SERVERS_JSON: %v", err)
+	}
+
+	udpMin := 0
+	if v := os.Getenv("WEBRTC_UDP_PORT_MIN"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			log.Fatalf("WEBRTC_UDP_PORT_MIN must be an integer: %v", err)
+		}
+		udpMin = n
+	}
+	udpMax := 0
+	if v := os.Getenv("WEBRTC_UDP_PORT_MAX"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			log.Fatalf("WEBRTC_UDP_PORT_MAX must be an integer: %v", err)
+		}
+		udpMax = n
+	}
+
 	return &Config{
 		Port:                   port,
 		DatabaseURL:            dbURL,
@@ -116,5 +145,22 @@ func Load() *Config {
 		QueueBlockTimeout:      time.Duration(blockSec) * time.Second,
 		EvaluationCacheTTL:     time.Duration(cacheTTLMin) * time.Minute,
 		RateLimitUserPerMinute: rateUser,
+		WebRTCICEServers:       iceServers,
+		WebRTCUDPPortMin:       udpMin,
+		WebRTCUDPPortMax:       udpMax,
 	}
+}
+
+// parseICEServersJSON decodes a JSON array of ICE servers (Pion webrtc.ICEServer shape).
+// Example: [{"urls":["stun:stun.l.google.com:19302"]}]
+// If empty, returns a default public STUN server.
+func parseICEServersJSON(raw string) ([]webrtc.ICEServer, error) {
+	if strings.TrimSpace(raw) == "" {
+		return []webrtc.ICEServer{{URLs: []string{"stun:stun.l.google.com:19302"}}}, nil
+	}
+	var servers []webrtc.ICEServer
+	if err := json.Unmarshal([]byte(raw), &servers); err != nil {
+		return nil, err
+	}
+	return servers, nil
 }
