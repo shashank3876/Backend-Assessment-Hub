@@ -14,6 +14,7 @@ import (
 type Config struct {
 	Port                   string
 	DatabaseURL            string
+	JWTSecret              string
 	ClerkJWKSURL           string
 	OpenAIBaseURL          string
 	OpenAIAPIKey           string
@@ -42,9 +43,6 @@ func Load() *Config {
 	}
 
 	clerkJWKSURL := os.Getenv("CLERK_JWKS_URL")
-	if clerkJWKSURL == "" {
-		log.Fatal("CLERK_JWKS_URL environment variable is required")
-	}
 
 	redisAddr := os.Getenv("REDIS_ADDR")
 	if redisAddr == "" {
@@ -134,6 +132,7 @@ func Load() *Config {
 	return &Config{
 		Port:                   port,
 		DatabaseURL:            dbURL,
+		JWTSecret:              os.Getenv("JWT_SECRET"),
 		ClerkJWKSURL:           clerkJWKSURL,
 		OpenAIBaseURL:          os.Getenv("AI_INTEGRATIONS_OPENAI_BASE_URL"),
 		OpenAIAPIKey:           os.Getenv("AI_INTEGRATIONS_OPENAI_API_KEY"),

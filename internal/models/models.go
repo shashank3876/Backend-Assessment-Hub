@@ -138,3 +138,15 @@ type EvaluationJob struct {
 	AnswerText  string
 	RetryCount  int
 }
+
+type Assignment struct {
+	ID             string    `json:"id"`
+	InterviewID    string    `json:"interviewId"`
+	RecruiterID    string    `json:"recruiterId"`
+	CandidateID    string    `json:"candidateId"`
+	CreatedAt      time.Time `json:"createdAt"`
+	RecruiterName  string    `json:"recruiterName"`
+	RecruiterEmail string    `json:"recruiterEmail"`
+	CandidateName  string    `json:"candidateName"`
+	CandidateEmail string    `json:"candidateEmail"`
+}

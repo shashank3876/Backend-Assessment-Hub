@@ -137,14 +137,20 @@ func (r *Room) waitOtherPeer(self *Participant) *Participant {
 	defer r.mu.Unlock()
 	for {
 		other := r.other(self)
-		if other == nil {
-			return nil
+		if other != nil {
+			other.mu.Lock()
+			hasPC := other.pc != nil
+			other.mu.Unlock()
+			if hasPC {
+				return other
+			}
 		}
-		other.mu.Lock()
-		hasPC := other.pc != nil
-		other.mu.Unlock()
-		if hasPC {
-			return other
+		// Check if self is still in the room before waiting
+		self.mu.Lock()
+		active := self.pc != nil
+		self.mu.Unlock()
+		if !active {
+			return nil
 		}
 		r.cond.Wait()
 	}
@@ -173,6 +179,15 @@ func (r *Room) forwardTrack(from *Participant, track *webrtc.TrackRemote) {
 	if err != nil {
 		return
 	}
+
+	// Trigger renegotiation so the other peer gets the new track
+	offer, err := pc.CreateOffer(nil)
+	if err == nil {
+		if err := pc.SetLocalDescription(offer); err == nil {
+			_ = other.SendSignal(&SignalMessage{Type: "offer", SDP: pc.LocalDescription().SDP})
+		}
+	}
+
 	go func() {
 		rtcpBuf := make([]byte, 1500)
 		for {
@@ -243,6 +258,17 @@ func (r *Room) HandleOffer(p *Participant, offerSDP string) (*webrtc.SessionDesc
 	r.cond.Broadcast()
 	r.mu.Unlock()
 	return pc.LocalDescription(), nil
+}
+
+// HandleAnswer applies the browser answer SDP during renegotiation.
+func (r *Room) HandleAnswer(p *Participant, answerSDP string) error {
+	p.mu.Lock()
+	pc := p.pc
+	p.mu.Unlock()
+	if pc == nil {
+		return nil
+	}
+	return pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: answerSDP})
 }
 
 // AddICECandidate adds a trickle ICE candidate from the browser.

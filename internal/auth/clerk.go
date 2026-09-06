@@ -17,6 +17,9 @@ type Verifier struct {
 }
 
 func NewVerifier(jwksURL string) *Verifier {
+	if jwksURL == "" {
+		return nil
+	}
 	cache := jwk.NewCache(context.Background())
 	_ = cache.Register(jwksURL)
 	return &Verifier{cache: cache, jwksURL: jwksURL}

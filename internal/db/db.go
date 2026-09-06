@@ -44,7 +44,7 @@ func (d *DB) Migrate(ctx context.Context) error {
 		CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 		CREATE TABLE IF NOT EXISTS users (
-			id TEXT PRIMARY KEY,
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 			name TEXT NOT NULL,
 			email TEXT NOT NULL UNIQUE,
 			password_hash TEXT NOT NULL DEFAULT '',
@@ -103,6 +103,18 @@ func (d *DB) Migrate(ctx context.Context) error {
 		CREATE INDEX IF NOT EXISTS idx_answers_status ON answers(status);
 		CREATE INDEX IF NOT EXISTS idx_evaluations_answer_id ON evaluations(answer_id);
 		CREATE INDEX IF NOT EXISTS idx_questions_interview_id ON questions(interview_id);
+
+		CREATE TABLE IF NOT EXISTS interview_assignments (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			interview_id UUID NOT NULL REFERENCES interviews(id) ON DELETE CASCADE,
+			recruiter_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			candidate_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			UNIQUE (interview_id, candidate_id)
+		);
+		CREATE INDEX IF NOT EXISTS idx_assignments_interview ON interview_assignments(interview_id);
+		CREATE INDEX IF NOT EXISTS idx_assignments_recruiter ON interview_assignments(recruiter_id);
+		CREATE INDEX IF NOT EXISTS idx_assignments_candidate ON interview_assignments(candidate_id);
 	`)
 	return err
 }
@@ -540,4 +552,57 @@ func (d *DB) IncrementEvaluationRetry(ctx context.Context, answerID string, retr
 		`UPDATE evaluations SET retry_count = $1 WHERE answer_id = $2`,
 		retryCount, answerID)
 	return err
+}
+
+// --- Interview Assignments ---
+
+func (d *DB) CreateAssignment(ctx context.Context, interviewID, recruiterID, candidateID string) error {
+	_, err := d.conn.ExecContext(ctx,
+		`INSERT INTO interview_assignments (interview_id, recruiter_id, candidate_id)
+		 VALUES ($1, $2, $3) ON CONFLICT (interview_id, candidate_id) DO UPDATE SET recruiter_id = EXCLUDED.recruiter_id`,
+		interviewID, recruiterID, candidateID)
+	return err
+}
+
+func (d *DB) DeleteAssignment(ctx context.Context, interviewID, candidateID string) error {
+	_, err := d.conn.ExecContext(ctx,
+		`DELETE FROM interview_assignments WHERE interview_id = $1 AND candidate_id = $2`,
+		interviewID, candidateID)
+	return err
+}
+
+func (d *DB) GetAssignmentsByInterview(ctx context.Context, interviewID string) ([]models.Assignment, error) {
+	rows, err := d.conn.QueryContext(ctx, `
+		SELECT ia.id, ia.interview_id, ia.recruiter_id, ia.candidate_id, ia.created_at,
+			ur.name, ur.email,
+			uc.name, uc.email
+		FROM interview_assignments ia
+		JOIN users ur ON ur.id = ia.recruiter_id
+		JOIN users uc ON uc.id = ia.candidate_id
+		WHERE ia.interview_id = $1
+		ORDER BY ia.created_at DESC`, interviewID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.Assignment
+	for rows.Next() {
+		var a models.Assignment
+		if err := rows.Scan(&a.ID, &a.InterviewID, &a.RecruiterID, &a.CandidateID, &a.CreatedAt,
+			&a.RecruiterName, &a.RecruiterEmail, &a.CandidateName, &a.CandidateEmail); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, nil
+}
+
+// GetAssignedRecruiter returns the recruiter assigned to a candidate for an interview.
+func (d *DB) GetAssignedRecruiter(ctx context.Context, interviewID, candidateID string) (string, error) {
+	var recruiterID string
+	err := d.conn.QueryRowContext(ctx,
+		`SELECT recruiter_id FROM interview_assignments WHERE interview_id = $1 AND candidate_id = $2`,
+		interviewID, candidateID,
+	).Scan(&recruiterID)
+	return recruiterID, err
 }
